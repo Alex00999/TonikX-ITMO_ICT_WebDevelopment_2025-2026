@@ -1,4 +1,5 @@
 import socket
+from urllib.parse import unquote
 
 
 class MyHTTPServer:
@@ -40,7 +41,7 @@ class MyHTTPServer:
             conn.close()
 
     def parse_request(self, conn):
-        raw_data = conn.recv(1024).decode()
+        raw_data = conn.recv(1024).decode('utf-8')
         params = {}
         headers = {}
 
@@ -52,7 +53,7 @@ class MyHTTPServer:
             adress, raw_params = url.split('?')
             for param in raw_params.split('&'):
                 name, value = param.split('=')
-                params[name] = value.replace('+', ' ')
+                params[name] = unquote(value.replace('+', ' '))
         else:
             adress = url
             params = None
@@ -68,7 +69,7 @@ class MyHTTPServer:
                     for param in body.split('&'):
                         if '=' in param:
                             name, value = param.split('=')
-                            params[name] = value.replace('+', ' ')
+                            params[name] = unquote(value.replace('+', ' '))
                 break
             elif ': ' in header:
                 name, value = header.split(': ')
@@ -87,7 +88,7 @@ class MyHTTPServer:
                 value = params['value']
 
                 if key and value:
-                    self.database[key] = value
+                    self.database.setdefault(key, []).append(value)
                     message = f'<p>Добавлено: {key} = {value}</p>'
                     print(self.database)
                 else:
@@ -99,7 +100,7 @@ class MyHTTPServer:
         table_rows = ""
         if self.database:
             for key, value in self.database.items():
-                table_rows += f'<tr><td>{key}</td><td>{value}</td></tr>'
+                table_rows += f'<tr><td>{key}</td><td>{" ".join(value)}</td></tr>'
         else:
             table_rows = '<tr><td colspan="2">База данных пуста</td></tr>'
 
@@ -117,14 +118,14 @@ class MyHTTPServer:
                     <table border="1">
                         <tr>
                             <th>Дисциплина</th>
-                            <th>Оценка</th>
+                            <th>Оценки</th>
                         </tr>
                         {table_rows}
                     </table>
                     
                     <form method="POST" action="/">
                         <input type="text" name="key" placeholder="Дисциплина" required>
-                        <input type="text" name="value" placeholder="Оценка" required>
+                        <input type="text" name="value" placeholder="Оценки" required>
 
                         <button type="submit">Отправить</button>
                     </form>
@@ -143,8 +144,7 @@ class MyHTTPServer:
             "\r\n"
         )
         response += resp
-
-        conn.sendall(response.encode('utf-8'))
+        conn.sendall(response.encode('utf-8'))  # UTF-8 encoding
 
     def send_error(self, conn, err):
         error_response = (
