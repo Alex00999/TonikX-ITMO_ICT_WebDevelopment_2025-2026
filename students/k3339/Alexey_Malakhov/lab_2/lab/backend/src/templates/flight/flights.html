@@ -1,0 +1,39 @@
+{% extends "base.html" %} {% block title %} Flights {% endblock %} {% block content %}
+<table border="1" class="flights-table">
+  <thead>
+    <tr>
+      <th>Время</th>
+      <th>Рейс</th>
+      <th>Авиакомпания</th>
+      <th>Тип</th>
+      <th>Гейт</th>
+      <th>Статус</th>
+      <th>Действия</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for flight in flights %}
+    <tr>
+      {% if filter_type == 'departures' %}
+      <td>{{ flight.departure_time.strftime("%d.%m.%Y %H:%M") }}</td>
+      {% elif filter_type == 'arrivals' %}
+      <td>{{ flight.arrival_time.strftime("%d.%m.%Y %H:%M") }}</td>
+      {% else %}
+      <td>{{ flight.departure_time.strftime("%d.%m.%Y %H:%M") }} → {{ flight.arrival_time.strftime("%H:%M") }}</td>
+      {% endif %}
+
+      <td>{{ flight.flight_number }}</td>
+      <td>{{ flight.airline.name if flight.airline else "N/A" }}</td>
+      <td>{{ flight.flight_type.name if flight.flight_type else "N/A" }}</td>
+      <td>{{ flight.gate_number }}</td>
+      <td>{{ flight.flight_status.name if flight.flight_status else "N/A" }}</td>
+      <td>
+        <a href="/flights/edit/{{ flight.id_flight }}">Edit</a> |
+        <a href="/flights/delete/{{ flight.id_flight }}">Delete</a> |
+        <a href="/flights/detail/{{ flight.id_flight }}">Detail</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

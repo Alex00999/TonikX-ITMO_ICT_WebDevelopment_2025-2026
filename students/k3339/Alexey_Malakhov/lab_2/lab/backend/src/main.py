@@ -6,15 +6,22 @@ from src.database import engine
 from src.models.base import Base
 
 from src.models.user import User
-from src.models.driver_license import DriverLicense
-from src.models.car import Car
-from src.models.ownership import Ownership
+from src.models.airlane import Airlane
+from src.models.flight import Flight
+from src.models.flight_status import FlightStatus
+from src.models.flight_type import FlightType
+from src.models.reservation import Reservation
+from src.models.review import Review
+from src.models.seat import Seat
+from src.models.ticket import Ticket
 
 from starlette_admin.contrib.sqla import Admin, ModelView
 from starlette_admin.auth import AdminUser, AuthProvider
 
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+
+from sqlalchemy.orm import registry
 
 templates = Jinja2Templates(directory="src/templates")
 
@@ -43,12 +50,12 @@ async def on_startup():
 
 app.include_router(main_router)
 
-
 admin = Admin(engine, title="My Admin")
 
-admin.add_view(ModelView(User))
-admin.add_view(ModelView(Car))
-admin.add_view(ModelView(Ownership))
-admin.add_view(ModelView(DriverLicense))
+mapper_registry: registry = Base.registry
+
+for mapper in mapper_registry.mappers:
+    model = mapper.class_
+    admin.add_view(ModelView(model))
 
 admin.mount_to(app)
