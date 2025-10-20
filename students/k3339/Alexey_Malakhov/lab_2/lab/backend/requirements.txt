@@ -6,3 +6,6 @@ asyncpg
 alembic
 starlette-admin[sqlalchemy]
 jinja2
+fastapi-authx
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.2

@@ -1,124 +1,131 @@
-from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from src.database import get_session
 from src.models.flight import Flight
+from src.models.reservation import Reservation
+from sqlalchemy import select, func
 
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import selectinload
+from src.models.seat import Seat
+
+from src.tools import get_user_from_token
+from src.models.review import Review
+from src.models.airlane import Airlane
 
 templates = Jinja2Templates(directory="src/templates")
-router = APIRouter(prefix="/flights")
+router = APIRouter(prefix="/flights", tags=["Flights"])
+
+
+def seat_sort_key(seat):
+    num = int(''.join(filter(str.isdigit, seat.seat_number)))
+    letter = ''.join(filter(str.isalpha, seat.seat_number))
+    return (num, letter)
 
 
 @router.get("/detail/{flight_id}", response_class=HTMLResponse)
-async def flight_by_id(flight_id: int, request: Request, session: AsyncSession = Depends(get_session)):
+async def flight_by_id(
+    flight_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    user = await get_user_from_token(request, session)
+
     result = await session.execute(
-        select(Flight).where(Flight.id_flight == flight_id).options(selectinload(Flight.users))
+        select(Flight)
+        .where(Flight.id_flight == flight_id)
+        .options(
+            selectinload(Flight.airline),
+            selectinload(Flight.reviews),
+            selectinload(Flight.seats).selectinload(Seat.reservation).selectinload(Reservation.user),
+        )
     )
+
+    flight = result.scalars().first()
+    if not flight:
+        raise HTTPException(status_code=404, detail="Рейс не найден")
+
+    all_reserved_seat_ids = {seat.id_seat for seat in flight.seats if seat.reservation}
+    flight_users = {seat.reservation.user for seat in flight.seats if seat.reservation}
+
+    if user:
+        user_reserved_seats = sorted(
+            [seat for seat in flight.seats if seat.reservation and seat.reservation.user == user],
+            key=seat_sort_key,
+        )
+    else:
+        user_reserved_seats = []
+
     return templates.TemplateResponse(
-        "flight/flight_detailed.html", {"request": request, "flight": result.scalars().first()}
+        "flight/flight_detailed.html",
+        {
+            "request": request,
+            "flight": flight,
+            "reserved_seat_ids": all_reserved_seat_ids,
+            "user": user,
+            "flight_users": flight_users,
+            "user_reserved_seats": user_reserved_seats,
+            "reviews": flight.reviews,
+        },
     )
 
 
 @router.get("", response_class=HTMLResponse)
-async def flights(request: Request, session: AsyncSession = Depends(get_session), type: str | None = None):
-    query = select(Flight)
+async def flights(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    page: int = 1,
+    type: str | None = None,
+    per_page: int = 10,
+    search: str | None = None,
+):
+    user = await get_user_from_token(request, session)
 
+    base_query = (
+        select(Flight).options(selectinload(Flight.airline)).join(Airlane, Flight.airline_id == Airlane.id_airline)
+    )
+
+    # фильтр по типу рейса
     if type == "departures":
-        query = query.filter(Flight.flight_type_id == 2)
+        base_query = base_query.filter(Flight.flight_type == "departure")
     elif type == "arrivals":
-        query = query.filter(Flight.flight_type_id == 1)
+        base_query = base_query.filter(Flight.flight_type == "arrival")
+
+    # простой поиск
+    if search:
+        like_pattern = f"%{search.lower()}%"
+        base_query = base_query.filter(
+            or_(
+                func.lower(Flight.flight_number).like(like_pattern),
+                func.lower(Flight.destination).like(like_pattern),
+                func.lower(Airlane.name).like(like_pattern),
+            )
+        )
+
+    # считаем общее количество строк
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await session.execute(count_query)).scalar_one()
+
+    # пагинация
+    offset = (page - 1) * per_page
+    query = base_query.limit(per_page).offset(offset)
 
     result = await session.execute(query)
     flights = result.scalars().all()
 
+    total_pages = (total + per_page - 1) // per_page
+
     return templates.TemplateResponse(
         "flight/flights.html",
-        {"request": request, "flights": flights, "filter_type": type or "all"},
+        {
+            "request": request,
+            "flights": flights,
+            "filter_type": type or "all",
+            "user": user,
+            "page": page,
+            "total_pages": total_pages,
+            "search": search or "",
+        },
     )
-
-
-@router.get("/edit/{flight_id}", response_class=HTMLResponse)
-async def edit_flight(flight_id: int, request: Request, session: AsyncSession = Depends(get_session)):
-    result = await session.execute(
-        select(Flight).where(Flight.id_flight == flight_id).options(selectinload(Flight.users))
-    )
-    return templates.TemplateResponse(
-        "flight/flight_edit.html", {"request": request, "flight": result.scalars().first()}
-    )
-
-
-@router.post("/edit/{flight_id}")
-async def edit_flight_submit(flight_id: int, request: Request, session: AsyncSession = Depends(get_session)):
-    form = await request.form()
-    flight = await session.get(Flight, flight_id)
-    if not flight:
-        return RedirectResponse("/flights", status_code=303)
-
-    flight.brand = (form.get("brand") or "").strip()  # type: ignore
-    flight.model = (form.get("model") or "").strip()  # type: ignore
-    flight.plate = (form.get("plate") or "").strip()  # type: ignore
-    flight.color = (form.get("color") or "").strip()  # type: ignore
-
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        return RedirectResponse(f"/flights/edit/{flight_id}", status_code=303)
-
-    return RedirectResponse(f"/flights/edit/{flight.id_flight}", status_code=303)
-
-
-@router.get("/delete/{flight_id}", response_class=HTMLResponse)
-async def delete_flight(flight_id: int, request: Request, session: AsyncSession = Depends(get_session)):
-    result = await session.execute(
-        select(Flight).where(Flight.id_flight == flight_id).options(selectinload(Flight.users))
-    )
-    return templates.TemplateResponse(
-        "flight/flight_delete.html", {"request": request, "flight": result.scalars().first()}
-    )
-
-
-@router.post("/delete/{flight_id}", response_class=HTMLResponse)
-async def delete_flight_submit(flight_id: int, request: Request, session: AsyncSession = Depends(get_session)):
-    flight = await session.get(Flight, flight_id)
-    if not flight:
-        return RedirectResponse("/flights", status_code=303)
-
-    try:
-        await session.delete(flight)
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        return RedirectResponse(f"/flights/delete/{flight_id}", status_code=303)
-
-    return RedirectResponse("/flights/all", status_code=303)
-
-
-@router.get("/add", response_class=HTMLResponse)
-async def add_flight(request: Request, session: AsyncSession = Depends(get_session)):
-    return templates.TemplateResponse("flight/flight_add.html", {"request": request, "flight": None})
-
-
-@router.post("/add")
-async def add_flight_submit(request: Request, session: AsyncSession = Depends(get_session)):
-    form = await request.form()
-
-    plate = (form.get("plate") or "").strip()  # type: ignore
-    brand = (form.get("brand") or "").strip()  # type: ignore
-    model = (form.get("model") or "").strip()  # type: ignore
-    color = (form.get("color") or "").strip()  # type: ignore
-
-    flight = Flight(plate=plate, brand=brand, model=model, color=color)
-    session.add(flight)
-
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        # при ошибке можно вернуть обратно на форму
-        return RedirectResponse("/flights/add", status_code=303)
-
-    return RedirectResponse(f"/flights/detail/{flight.id_flight}", status_code=303)
